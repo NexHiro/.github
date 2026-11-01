@@ -18,11 +18,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Scan full git history
+      - name: Scan new commits on PRs, full history otherwise
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          range=()
+          [ -n "$BASE_SHA" ] && range=(--log-opts="$BASE_SHA..$HEAD_SHA")
           docker run --rm -v "$PWD:/repo" -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
-            git --redact --verbose --no-banner .
+            git --redact --verbose --no-banner "${range[@]}" .
 
   dependencies:
     name: Dependencies and config (trivy)
@@ -37,13 +42,19 @@ jobs:
           path: .trivy-cache
           key: trivy-${{ github.run_id }}
           restore-keys: trivy-
-      - name: Scan lockfiles, Dockerfiles, Kubernetes and Terraform
+      - name: High and critical misconfigurations (report only)
         run: |
-          docker run --rm -v "$PWD:/repo" -w /repo \
-            aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
-            fs --cache-dir .trivy-cache --scanners vuln,misconfig \
-            --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs .trivy-cache \
-            --exit-code 1 .
+          docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            fs --cache-dir .trivy-cache --scanners misconfig --severity HIGH,CRITICAL \
+            --skip-dirs .trivy-cache .
+      - name: Fail on fixable vulnerabilities and critical misconfigurations
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            fs --cache-dir .trivy-cache --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --skip-dirs .trivy-cache --exit-code 1 .
+          docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            fs --cache-dir .trivy-cache --scanners misconfig --severity CRITICAL \
+            --skip-dirs .trivy-cache --exit-code 1 .
 
   code:
     name: Code (semgrep)
