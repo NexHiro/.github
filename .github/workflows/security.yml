@@ -1,0 +1,77 @@
+name: Security scan
+
+# Shared by every NexHiro repo. Public so private repos can call it; no secrets here.
+# GitHub code scanning needs Advanced Security, so results go to logs and the job summary.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan full git history
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --redact --verbose --no-banner .
+
+  dependencies:
+    name: Dependencies and config (trivy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .trivy-cache
+          key: trivy-${{ github.run_id }}
+          restore-keys: trivy-
+      - name: Scan lockfiles, Dockerfiles, Kubernetes and Terraform
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            fs --cache-dir .trivy-cache --scanners vuln,misconfig \
+            --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs .trivy-cache \
+            --exit-code 1 .
+
+  code:
+    name: Code (semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Static analysis
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0 \
+            semgrep scan --config p/default --severity ERROR --metrics off --error .
+
+  workflows:
+    name: Workflows (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: Audit GitHub Actions
+        run: |
+          [ -d .github/workflows ] || exit 0
+          pip install --quiet zizmor==1.31.1
+          zizmor --offline --min-severity high --no-progress .github/workflows
